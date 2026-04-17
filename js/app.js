@@ -33,7 +33,7 @@
             this.timestamp = new Date().toISOString();
         }
         
-        validateInputs(itemName, amount, category) {
+        validateInputs(itemName, amount, category, validCategories) {
             // Validate item name
             if (!itemName || typeof itemName !== 'string' || itemName.trim().length === 0) {
                 throw new Error('Item name is required and must be a non-empty string');
@@ -58,9 +58,8 @@
             }
             
             // Validate category
-            const validCategories = ['Food', 'Transport', 'Fun'];
-            if (!category || !validCategories.includes(category)) {
-                throw new Error('Category must be one of: Food, Transport, Fun');
+            if (!category || (validCategories && !validCategories.includes(category))) {
+                throw new Error('Invalid category selected');
             }
         }
         
@@ -103,11 +102,37 @@
         constructor() {
             this.transactions = [];
             this.totalBalance = 0;
+            this.customCategories = [];
+            this.spendingLimit = 0;
+            this.sortConfig = { field: 'date', order: 'desc' };
+            this.categoryTotals = {};
+            this.resetCategoryTotals();
+        }
+
+        getSortedTransactions() {
+            const { field, order } = this.sortConfig;
+            return [...this.transactions].sort((a, b) => {
+                let comparison = 0;
+                if (field === 'date') {
+                    comparison = new Date(a.timestamp) - new Date(b.timestamp);
+                } else if (field === 'amount') {
+                    comparison = a.amount - b.amount;
+                } else if (field === 'category') {
+                    comparison = a.category.localeCompare(b.category);
+                }
+                return order === 'asc' ? comparison : -comparison;
+            });
+        }
+
+        resetCategoryTotals() {
             this.categoryTotals = {
                 Food: 0,
                 Transport: 0,
                 Fun: 0
             };
+            this.customCategories.forEach(cat => {
+                this.categoryTotals[cat] = 0;
+            });
         }
         
         addTransaction(transaction) {
@@ -123,6 +148,23 @@
             this.recalculateTotals();
             
             return transaction;
+        }
+
+        setSpendingLimit(limit) {
+            this.spendingLimit = parseFloat(limit) || 0;
+        }
+        
+        addCategory(category) {
+            if (category && !this.getAllCategories().includes(category)) {
+                this.customCategories.push(category);
+                this.recalculateTotals();
+                return true;
+            }
+            return false;
+        }
+
+        getAllCategories() {
+            return ['Food', 'Transport', 'Fun', ...this.customCategories];
         }
         
         removeTransaction(id) {
@@ -152,17 +194,14 @@
             this.totalBalance = this.transactions.reduce((sum, t) => sum + t.amount, 0);
             
             // Reset category totals
-            this.categoryTotals = {
-                Food: 0,
-                Transport: 0,
-                Fun: 0
-            };
+            this.resetCategoryTotals();
             
             // Calculate category totals
             this.transactions.forEach(transaction => {
-                if (this.categoryTotals.hasOwnProperty(transaction.category)) {
-                    this.categoryTotals[transaction.category] += transaction.amount;
+                if (!this.categoryTotals.hasOwnProperty(transaction.category)) {
+                    this.categoryTotals[transaction.category] = 0;
                 }
+                this.categoryTotals[transaction.category] += transaction.amount;
             });
         }
         
@@ -215,14 +254,14 @@
          * @param {Object} transactionData - Object containing itemName, amount, category
          * @returns {boolean} - True if all validation passes, false otherwise
          */
-        validateTransaction(transactionData) {
+        validateTransaction(transactionData, validCategories) {
             // Clear previous errors
             this.clearErrors();
             
             // Validate each field
             const itemNameValid = this.validateItemName(transactionData.itemName);
             const amountValid = this.validateAmount(transactionData.amount);
-            const categoryValid = this.validateCategory(transactionData.category);
+            const categoryValid = this.validateCategory(transactionData.category, validCategories);
             
             // Return true only if all validations pass
             return itemNameValid && amountValid && categoryValid;
@@ -301,9 +340,7 @@
          * @param {string} category - The category to validate
          * @returns {boolean} - True if valid, false otherwise
          */
-        validateCategory(category) {
-            const validCategories = ['Food', 'Transport', 'Fun'];
-            
+        validateCategory(category, validCategories) {
             // Check if category is provided
             if (!category || typeof category !== 'string' || category.trim().length === 0) {
                 this.errors.category = 'Please select a category';
@@ -311,8 +348,8 @@
             }
             
             // Check if category is valid
-            if (!validCategories.includes(category)) {
-                this.errors.category = 'Category must be one of: Food, Transport, Fun';
+            if (validCategories && !validCategories.includes(category)) {
+                this.errors.category = 'Invalid category selected';
                 return false;
             }
             
@@ -393,59 +430,68 @@
          * @returns {boolean} - Success status
          */
         saveTransactions(transactions) {
+            this.saveToStorage('expense-tracker-transactions', transactions);
+        }
+
+        saveCategories(categories) {
+            this.saveToStorage('expense-tracker-categories', categories);
+        }
+
+        saveSpendingLimit(limit) {
+            this.saveToStorage('expense-tracker-limit', limit);
+        }
+
+        saveTheme(theme) {
+            this.saveToStorage('expense-tracker-theme', theme);
+        }
+
+        saveSortConfig(config) {
+            this.saveToStorage('expense-tracker-sort', config);
+        }
+
+        saveToStorage(key, data) {
             try {
-                if (!this.isStorageAvailable()) {
-                    console.warn('Local Storage is not available');
-                    return false;
-                }
-                
-                const serializedData = JSON.stringify(transactions);
-                localStorage.setItem(this.storageKey, serializedData);
+                if (!this.isStorageAvailable()) return false;
+                localStorage.setItem(key, JSON.stringify(data));
                 return true;
             } catch (error) {
                 return this.handleStorageError(error);
             }
         }
         
-        /**
-         * Load transactions array from Local Storage
-         * @returns {Array} - Array of transaction objects or empty array
-         */
         loadTransactions() {
+            const parsedData = this.loadFromStorage('expense-tracker-transactions');
+            if (!parsedData) return [];
+            return parsedData.map(transactionData => {
+                try { return Transaction.fromJSON(transactionData); }
+                catch (e) { return null; }
+            }).filter(t => t !== null);
+        }
+
+        loadCategories() {
+            return this.loadFromStorage('expense-tracker-categories') || [];
+        }
+
+        loadSpendingLimit() {
+            return this.loadFromStorage('expense-tracker-limit') || 1000;
+        }
+
+        loadTheme() {
+            return this.loadFromStorage('expense-tracker-theme') || 'light';
+        }
+
+        loadSortConfig() {
+            return this.loadFromStorage('expense-tracker-sort') || { field: 'date', order: 'desc' };
+        }
+
+        loadFromStorage(key) {
             try {
-                if (!this.isStorageAvailable()) {
-                    console.warn('Local Storage is not available, returning empty array');
-                    return [];
-                }
-                
-                const storedData = localStorage.getItem(this.storageKey);
-                
-                if (!storedData) {
-                    // No stored data exists, return empty array
-                    return [];
-                }
-                
-                const parsedData = JSON.parse(storedData);
-                
-                // Validate that parsed data is an array
-                if (!Array.isArray(parsedData)) {
-                    console.warn('Stored data is not a valid array, returning empty array');
-                    return [];
-                }
-                
-                // Convert plain objects back to Transaction instances
-                return parsedData.map(transactionData => {
-                    try {
-                        return Transaction.fromJSON(transactionData);
-                    } catch (error) {
-                        console.warn('Failed to parse transaction data:', error);
-                        return null;
-                    }
-                }).filter(transaction => transaction !== null);
-                
+                if (!this.isStorageAvailable()) return null;
+                const storedData = localStorage.getItem(key);
+                return storedData ? JSON.parse(storedData) : null;
             } catch (error) {
                 this.handleStorageError(error);
-                return [];
+                return null;
             }
         }
         
@@ -493,10 +539,7 @@
         render() {
             // Get form element from DOM
             this.form = document.getElementById('expense-form');
-            if (!this.form) {
-                console.error('Form element not found');
-                return;
-            }
+            if (!this.form) return;
             
             // Cache form field references
             this.fields = {
@@ -511,84 +554,103 @@
                 amount: document.getElementById('amount-error'),
                 category: document.getElementById('category-error')
             };
+
+            // Custom category modal elements
+            this.modal = document.getElementById('custom-category-modal');
+            this.addCategoryBtn = document.getElementById('add-category-btn');
+            this.saveCategoryBtn = document.getElementById('save-category');
+            this.cancelCategoryBtn = document.getElementById('cancel-category');
+            this.newCategoryInput = document.getElementById('new-category-name');
             
             // Bind event listeners
             this.bindEvents();
+            this.updateCategoryOptions();
+        }
+
+        updateCategoryOptions() {
+            const select = this.fields.category;
+            const currentVal = select.value;
+            const categories = this.stateManager.state.getAllCategories();
             
-            console.log('InputFormComponent rendered and initialized');
+            select.innerHTML = '<option value="">Select Category</option>';
+            categories.forEach(cat => {
+                const opt = document.createElement('option');
+                opt.value = cat;
+                opt.textContent = cat;
+                select.appendChild(opt);
+            });
+            select.value = currentVal;
         }
         
-        /**
-         * Bind form events for submission and real-time validation
-         */
         bindEvents() {
             if (!this.form) return;
             
-            // Handle form submission
-            this.form.addEventListener('submit', (event) => {
-                this.handleSubmit(event);
-            });
+            this.form.addEventListener('submit', (e) => this.handleSubmit(e));
+
+            // Custom category events
+            if (this.addCategoryBtn) {
+                this.addCategoryBtn.addEventListener('click', () => {
+                    this.modal.style.display = 'flex';
+                    this.newCategoryInput.focus();
+                });
+            }
+
+            if (this.cancelCategoryBtn) {
+                this.cancelCategoryBtn.addEventListener('click', () => {
+                    this.modal.style.display = 'none';
+                    this.newCategoryInput.value = '';
+                });
+            }
+
+            if (this.saveCategoryBtn) {
+                this.saveCategoryBtn.addEventListener('click', () => {
+                    const name = this.newCategoryInput.value.trim();
+                    if (name) {
+                        this.stateManager.addCategory(name);
+                        this.modal.style.display = 'none';
+                        this.newCategoryInput.value = '';
+                    }
+                });
+            }
             
-            // Add real-time validation on blur events
             Object.keys(this.fields).forEach(fieldName => {
                 const field = this.fields[fieldName];
                 if (field) {
-                    field.addEventListener('blur', () => {
-                        this.validateField(fieldName);
-                    });
-                    
-                    // Clear errors on input to provide immediate feedback
-                    field.addEventListener('input', () => {
-                        this.clearFieldError(fieldName);
-                    });
+                    field.addEventListener('blur', () => this.validateField(fieldName));
+                    field.addEventListener('input', () => this.clearFieldError(fieldName));
                 }
             });
         }
         
-        /**
-         * Handle form submission with validation
-         * @param {Event} event - The form submit event
-         */
         handleSubmit(event) {
             event.preventDefault();
-            
-            // Clear any existing validation errors
             this.clearValidationErrors();
             
-            // Get form data
             const formData = this.getFormData();
-            
-            // Validate the transaction data
-            const isValid = this.validator.validateTransaction(formData);
+            const isValid = this.validator.validateTransaction(formData, this.stateManager.state.getAllCategories());
             
             if (!isValid) {
-                // Display validation errors
                 this.displayValidationErrors(this.validator.getErrorMessages());
                 return;
             }
             
             try {
-                // Create new transaction
                 const transaction = new Transaction(
                     formData.itemName,
                     formData.amount,
-                    formData.category
+                    formData.category,
+                    this.stateManager.state.getAllCategories()
                 );
-                
-                // Add transaction through state manager
                 this.stateManager.addTransaction(transaction);
-                
-                // Clear form after successful submission
                 this.clearForm();
-                
-                console.log('Transaction added successfully:', transaction);
-                
             } catch (error) {
                 console.error('Error creating transaction:', error);
-                // Display generic error message
-                this.displayValidationErrors({
-                    general: 'An error occurred while adding the transaction. Please try again.'
-                });
+            }
+        }
+
+        handleStateChange(eventType, data) {
+            if (eventType === 'categoryAdded' || eventType === 'dataLoaded') {
+                this.updateCategoryOptions();
             }
         }
         
@@ -726,9 +788,10 @@
             this.stateManager = stateManager;
             this.container = null;
             this.emptyState = null;
+            this.sortSelect = null;
             
             // Subscribe to state changes
-            this.stateManager.subscribe(this, ['transactionAdded', 'transactionDeleted', 'dataLoaded']);
+            this.stateManager.subscribe(this, ['transactionAdded', 'transactionDeleted', 'dataLoaded', 'sortChanged']);
         }
         
         /**
@@ -738,12 +801,24 @@
             // Get container elements from DOM
             this.container = document.querySelector('.transaction-container');
             this.emptyState = document.querySelector('.empty-state');
+            this.sortSelect = document.getElementById('sort-by');
             
-            if (!this.container || !this.emptyState) {
-                console.error('Transaction list container elements not found');
-                return;
+            if (!this.container || !this.emptyState) return;
+            
+            if (this.sortSelect) {
+                const { field, order } = this.stateManager.state.sortConfig;
+                this.sortSelect.value = `${field}-${order}`;
+                
+                // Only bind once
+                if (!this.sortSelect.dataset.bound) {
+                    this.sortSelect.addEventListener('change', (e) => {
+                        const [field, order] = e.target.value.split('-');
+                        this.stateManager.setSortConfig(field, order);
+                    });
+                    this.sortSelect.dataset.bound = 'true';
+                }
             }
-            
+
             // Clear existing content
             this.container.innerHTML = '';
             
@@ -757,8 +832,6 @@
                     this.container.appendChild(transactionElement);
                 });
             }
-            
-            console.log(`TransactionListComponent rendered with ${transactions.length} transactions`);
         }
         
         /**
@@ -900,6 +973,7 @@
                 case 'transactionAdded':
                 case 'transactionDeleted':
                 case 'dataLoaded':
+                case 'sortChanged':
                     // Re-render with updated transactions
                     this.render(data.transactions);
                     break;
@@ -980,86 +1054,55 @@
             this.stateManager = stateManager;
             this.element = null;
             this.balanceAmountElement = null;
+            this.limitInput = null;
             
-            // Subscribe to state changes
-            this.stateManager.subscribe(this, ['transactionAdded', 'transactionDeleted', 'dataLoaded']);
+            this.stateManager.subscribe(this, ['transactionAdded', 'transactionDeleted', 'dataLoaded', 'limitChanged']);
         }
         
-        /**
-         * Initialize the balance display component and render initial balance
-         * @param {number} totalBalance - The initial total balance to display
-         */
         render(totalBalance = 0) {
-            // Get balance display elements from DOM
             this.element = document.getElementById('balance-display');
             this.balanceAmountElement = document.querySelector('.balance-amount');
+            this.limitInput = document.getElementById('spending-limit');
             
-            if (!this.element || !this.balanceAmountElement) {
-                console.error('Balance display elements not found');
-                return;
+            if (!this.element || !this.balanceAmountElement) return;
+            
+            if (this.limitInput) {
+                this.limitInput.value = this.stateManager.state.spendingLimit;
+                this.limitInput.addEventListener('input', (e) => {
+                    this.stateManager.setLimit(e.target.value);
+                });
             }
-            
-            // Set initial balance display
+
             this.updateDisplay(totalBalance);
-            
-            console.log('BalanceDisplayComponent rendered with balance:', totalBalance);
         }
         
-        /**
-         * Update the balance display with new balance value
-         * @param {number} newBalance - The new balance to display
-         */
         updateDisplay(newBalance) {
-            if (!this.balanceAmountElement) {
-                console.error('Balance amount element not found');
-                return;
-            }
+            if (!this.balanceAmountElement) return;
             
-            // Format and display the new balance
             const formattedBalance = this.formatCurrency(newBalance);
             this.balanceAmountElement.textContent = `$${formattedBalance}`;
+            this.balanceAmountElement.setAttribute('aria-label', `Total spending: $${formattedBalance}`);
             
-            // Update aria-label for accessibility
-            this.balanceAmountElement.setAttribute('aria-label', `Total balance: $${formattedBalance}`);
-            
-            // Add visual feedback for balance changes
+            const limit = this.stateManager.state.spendingLimit;
+            if (limit > 0 && newBalance > limit) {
+                this.balanceAmountElement.classList.add('over-limit');
+            } else {
+                this.balanceAmountElement.classList.remove('over-limit');
+            }
+
             this.addUpdateAnimation();
-            
-            console.log('Balance display updated to:', formattedBalance);
         }
         
-        /**
-         * Format currency amount with proper decimal precision
-         * @param {number} amount - The amount to format
-         * @returns {string} Formatted currency string without $ symbol
-         */
         formatCurrency(amount) {
-            // Validate input
-            if (typeof amount !== 'number' || isNaN(amount)) {
-                console.warn('Invalid amount provided to formatCurrency:', amount);
-                return '0.00';
-            }
-            
-            // Format with 2 decimal places
+            if (typeof amount !== 'number' || isNaN(amount)) return '0.00';
             return amount.toFixed(2);
         }
         
-        /**
-         * Add visual animation when balance updates
-         */
         addUpdateAnimation() {
             if (!this.balanceAmountElement) return;
-            
-            // Remove existing animation class if present
             this.balanceAmountElement.classList.remove('balance-updated');
-            
-            // Force reflow to ensure class removal takes effect
             this.balanceAmountElement.offsetHeight;
-            
-            // Add animation class
             this.balanceAmountElement.classList.add('balance-updated');
-            
-            // Remove animation class after animation completes
             setTimeout(() => {
                 if (this.balanceAmountElement) {
                     this.balanceAmountElement.classList.remove('balance-updated');
@@ -1067,24 +1110,13 @@
             }, 300);
         }
         
-        /**
-         * Handle state changes from the AppStateManager
-         * @param {string} eventType - The type of event
-         * @param {Object} data - Event data containing totalBalance
-         */
         handleStateChange(eventType, data) {
-            switch (eventType) {
-                case 'transactionAdded':
-                case 'transactionDeleted':
-                case 'dataLoaded':
-                    // Update display with new balance
-                    if (typeof data.totalBalance === 'number') {
-                        this.updateDisplay(data.totalBalance);
-                    }
-                    break;
-                default:
-                    // Ignore other event types
-                    break;
+            if (eventType === 'limitChanged' || eventType === 'dataLoaded' || 
+                eventType === 'transactionAdded' || eventType === 'transactionDeleted') {
+                this.updateDisplay(this.stateManager.getTotalBalance());
+                if (eventType === 'dataLoaded' && this.limitInput) {
+                    this.limitInput.value = data.limit;
+                }
             }
         }
         
@@ -1183,28 +1215,35 @@
         
         updateChart(transactions = []) {
             const categoryTotals = this.calculateCategoryTotals(transactions);
-            const data = [categoryTotals.Food, categoryTotals.Transport, categoryTotals.Fun];
+            const categories = this.stateManager.state.getAllCategories();
+            const data = categories.map(cat => categoryTotals[cat] || 0);
             const isEmpty = data.every(value => value === 0);
             
             if (this.chart) {
+                this.chart.data.labels = categories;
                 this.chart.data.datasets[0].data = data;
+                
+                // Generate colors for new categories if needed
+                const currentColors = this.chart.data.datasets[0].backgroundColor;
+                if (currentColors.length < categories.length) {
+                    for (let i = currentColors.length; i < categories.length; i++) {
+                        const hue = (i * 137.5) % 360;
+                        currentColors.push(`hsl(${hue}, 70%, 60%)`);
+                    }
+                }
+                
                 this.chart.update('active');
             }
             
-            // Show/hide empty state
-            if (isEmpty) {
-                this.showEmptyState();
-            } else {
-                this.hideEmptyState();
-            }
+            if (isEmpty) this.showEmptyState();
+            else this.hideEmptyState();
         }
         
         calculateCategoryTotals(transactions = []) {
-            const totals = {
-                Food: 0,
-                Transport: 0,
-                Fun: 0
-            };
+            const totals = {};
+            this.stateManager.state.getAllCategories().forEach(cat => {
+                totals[cat] = 0;
+            });
             
             transactions.forEach(transaction => {
                 if (totals.hasOwnProperty(transaction.category)) {
@@ -1269,7 +1308,8 @@
         }
         
         handleStateChange(eventType, data) {
-            if (eventType === 'transactionAdded' || eventType === 'transactionDeleted') {
+            if (eventType === 'transactionAdded' || eventType === 'transactionDeleted' || 
+                eventType === 'categoryAdded' || eventType === 'dataLoaded') {
                 const transactions = this.stateManager.getTransactions();
                 this.render(transactions);
             }
@@ -1290,115 +1330,107 @@
             this.storageManager = new StorageManager();
         }
         
-        /**
-         * Add a transaction to the application state
-         * @param {Transaction} transaction - The transaction to add
-         */
         addTransaction(transaction) {
             try {
-                // Add transaction to state
                 this.state.addTransaction(transaction);
-                
-                // Save to storage
                 this.saveToStorage();
-                
-                // Notify components of the change
                 this.notifyComponents('transactionAdded', {
                     transaction: transaction,
                     totalBalance: this.state.getTotalBalance(),
-                    transactions: this.state.getTransactions()
+                    transactions: this.getTransactions(),
+                    limit: this.state.spendingLimit
                 });
-                
-                console.log('Transaction added successfully:', transaction.id);
-                
             } catch (error) {
                 console.error('Error adding transaction:', error);
                 throw error;
             }
         }
         
-        /**
-         * Delete a transaction from the application state
-         * @param {string} id - The transaction ID to delete
-         */
         deleteTransaction(id) {
             try {
-                // Remove transaction from state
                 const removedTransaction = this.state.removeTransaction(id);
-                
-                // Save to storage
                 this.saveToStorage();
-                
-                // Notify components of the change
                 this.notifyComponents('transactionDeleted', {
                     transaction: removedTransaction,
                     totalBalance: this.state.getTotalBalance(),
-                    transactions: this.state.getTransactions()
+                    transactions: this.getTransactions(),
+                    limit: this.state.spendingLimit
                 });
-                
-                console.log('Transaction deleted successfully:', id);
-                
             } catch (error) {
                 console.error('Error deleting transaction:', error);
                 throw error;
             }
         }
-        
-        /**
-         * Get all transactions
-         * @returns {Array} Array of transactions
-         */
-        getTransactions() {
-            return this.state.getTransactions();
+
+        addCategory(category) {
+            if (this.state.addCategory(category)) {
+                this.storageManager.saveCategories(this.state.customCategories);
+                this.notifyComponents('categoryAdded', {
+                    categories: this.state.getAllCategories()
+                });
+                return true;
+            }
+            return false;
+        }
+
+        setLimit(limit) {
+            this.state.setSpendingLimit(limit);
+            this.storageManager.saveSpendingLimit(limit);
+            this.notifyComponents('limitChanged', {
+                limit: this.state.spendingLimit,
+                totalBalance: this.state.totalBalance
+            });
+        }
+
+        setSortConfig(field, order) {
+            this.state.sortConfig = { field, order };
+            this.storageManager.saveSortConfig(this.state.sortConfig);
+            this.notifyComponents('sortChanged', {
+                transactions: this.state.getSortedTransactions()
+            });
         }
         
-        /**
-         * Get total balance
-         * @returns {number} Total balance
-         */
+        getTransactions() {
+            return this.state.getSortedTransactions();
+        }
+        
         getTotalBalance() {
             return this.state.getTotalBalance();
         }
         
-        /**
-         * Save current state to storage
-         */
         saveToStorage() {
             const transactions = this.state.getTransactions().map(t => t.toJSON());
             this.storageManager.saveTransactions(transactions);
         }
         
-        /**
-         * Load initial data from storage
-         */
         loadFromStorage() {
             try {
                 const transactions = this.storageManager.loadTransactions();
+                const categories = this.storageManager.loadCategories();
+                const limit = this.storageManager.loadSpendingLimit();
+                const sortConfig = this.storageManager.loadSortConfig();
                 
-                // Clear current state and add loaded transactions
                 this.state.clear();
+                this.state.customCategories = categories;
+                this.state.setSpendingLimit(limit);
+                this.state.sortConfig = sortConfig;
+                
                 transactions.forEach(transaction => {
                     this.state.addTransaction(transaction);
                 });
                 
-                // Notify components of initial data load
                 this.notifyComponents('dataLoaded', {
                     totalBalance: this.state.getTotalBalance(),
-                    transactions: this.state.getTransactions()
+                    transactions: this.getTransactions(),
+                    categories: this.state.getAllCategories(),
+                    limit: this.state.spendingLimit,
+                    sortConfig: this.state.sortConfig
                 });
-                
-                console.log(`Loaded ${transactions.length} transactions from storage`);
-                
             } catch (error) {
                 console.error('Error loading from storage:', error);
             }
         }
         
-        /**
-         * Notify all subscribed components of state changes
-         * @param {string} eventType - The type of event that occurred
-         * @param {Object} data - Data associated with the event
-         */
         notifyComponents(eventType, data) {
             this.components.forEach(component => {
                 if (component.handleStateChange && typeof component.handleStateChange === 'function') {
@@ -1411,28 +1443,40 @@
             });
         }
         
-        /**
-         * Subscribe a component to state changes
-         * @param {Object} component - The component to subscribe
-         * @param {Array} eventTypes - Array of event types the component is interested in
-         */
         subscribe(component, eventTypes) {
             if (!this.components.includes(component)) {
                 this.components.push(component);
-                console.log('Component subscribed to state changes');
             }
         }
         
-        /**
-         * Unsubscribe a component from state changes
-         * @param {Object} component - The component to unsubscribe
-         */
         unsubscribe(component) {
-            const index = this.components.indexOf(component);
-            if (index > -1) {
-                this.components.splice(index, 1);
-                console.log('Component unsubscribed from state changes');
+            this.components = this.components.filter(c => c !== component);
+        }
+    }
+
+    class ThemeManager {
+        constructor(stateManager) {
+            this.stateManager = stateManager;
+            this.theme = 'light';
+            this.toggleBtn = null;
+        }
+
+        init() {
+            this.toggleBtn = document.getElementById('theme-toggle');
+            this.theme = this.stateManager.storageManager.loadTheme();
+            this.applyTheme();
+
+            if (this.toggleBtn) {
+                this.toggleBtn.addEventListener('click', () => {
+                    this.theme = this.theme === 'light' ? 'dark' : 'light';
+                    this.applyTheme();
+                    this.stateManager.storageManager.saveTheme(this.theme);
+                });
             }
+        }
+
+        applyTheme() {
+            document.documentElement.setAttribute('data-theme', this.theme);
         }
     }
     
@@ -1442,12 +1486,14 @@
             this.stateManager = null;
             this.components = {};
             this.validator = null;
+            this.themeManager = null;
         }
         
         initializeComponents() {
             // Initialize core components
             this.validator = new Validator();
             this.stateManager = new AppStateManager();
+            this.themeManager = new ThemeManager(this.stateManager);
             
             // Initialize UI components
             this.components.inputForm = new InputFormComponent(this.stateManager, this.validator);
@@ -1459,11 +1505,13 @@
         }
         
         bindEvents() {
+            this.themeManager.init();
+            
             // Subscribe components to state changes
-            this.stateManager.subscribe(this.components.inputForm, ['transactionAdded']);
+            this.stateManager.subscribe(this.components.inputForm, ['transactionAdded', 'categoryAdded', 'dataLoaded']);
             this.stateManager.subscribe(this.components.transactionList, ['transactionAdded', 'transactionDeleted', 'dataLoaded']);
-            this.stateManager.subscribe(this.components.balanceDisplay, ['transactionAdded', 'transactionDeleted', 'dataLoaded']);
-            this.stateManager.subscribe(this.components.chart, ['transactionAdded', 'transactionDeleted', 'dataLoaded']);
+            this.stateManager.subscribe(this.components.balanceDisplay, ['transactionAdded', 'transactionDeleted', 'dataLoaded', 'limitChanged']);
+            this.stateManager.subscribe(this.components.chart, ['transactionAdded', 'transactionDeleted', 'categoryAdded', 'dataLoaded']);
             
             // Render the input form component
             if (this.components.inputForm) {
