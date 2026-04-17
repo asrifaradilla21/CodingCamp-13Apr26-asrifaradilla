@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Balance Component Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; }
+        .balance-amount { font-size: 2rem; font-weight: bold; color: #27ae60; }
+        .balance-updated { transform: scale(1.05); color: #3498db; transition: all 0.3s ease; }
+        .pass { color: green; }
+        .fail { color: red; }
+    </style>
+</head>
+<body>
+    <h1>BalanceDisplayComponent Test</h1>
+    
+    <div class="test-section">
+        <h2>Test Balance Display</h2>
+        <section id="balance-display" role="region" aria-labelledby="balance-heading">
+            <h2 id="balance-heading">Total Balance</h2>
+            <div class="balance-amount" role="status" aria-live="polite">$0.00</div>
+        </section>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test Results</h2>
+        <div id="test-results"></div>
+    </div>
+    
+    <script>
+        // Mock state manager for testing
+        class MockStateManager {
+            constructor() {
+                this.components = [];
+                this.totalBalance = 0;
+            }
+            
+            subscribe(component, eventTypes) {
+                this.components.push(component);
+            }
+            
+            getTotalBalance() {
+                return this.totalBalance;
+            }
+            
+            setTotalBalance(balance) {
+                this.totalBalance = balance;
+                this.notifyComponents('transactionAdded', { totalBalance: balance });
+            }
+            
+            notifyComponents(eventType, data) {
+                this.components.forEach(component => {
+                    if (component.handleStateChange) {
+                        component.handleStateChange(eventType, data);
+                    }
+                });
+            }
+        }
+        
+        // BalanceDisplayComponent implementation (copied from main app)
+        class BalanceDisplayComponent {
+            constructor(stateManager) {
+                this.stateManager = stateManager;
+                this.element = null;
+                this.balanceAmountElement = null;
+                
+                // Subscribe to state changes
+                this.stateManager.subscribe(this, ['transactionAdded', 'transactionDeleted', 'dataLoaded']);
+            }
+            
+            render(totalBalance = 0) {
+                this.element = document.getElementById('balance-display');
+                this.balanceAmountElement = document.querySelector('.balance-amount');
+                
+                if (!this.element || !this.balanceAmountElement) {
+                    console.error('Balance display elements not found');
+                    return;
+                }
+                
+                this.updateDisplay(totalBalance);
+                console.log('BalanceDisplayComponent rendered with balance:', totalBalance);
+            }
+            
+            updateDisplay(newBalance) {
+                if (!this.balanceAmountElement) {
+                    console.error('Balance amount element not found');
+                    return;
+                }
+                
+                const formattedBalance = this.formatCurrency(newBalance);
+                this.balanceAmountElement.textContent = `$${formattedBalance}`;
+                this.balanceAmountElement.setAttribute('aria-label', `Total balance: $${formattedBalance}`);
+                this.addUpdateAnimation();
+                console.log('Balance display updated to:', formattedBalance);
+            }
+            
+            formatCurrency(amount) {
+                if (typeof amount !== 'number' || isNaN(amount)) {
+                    console.warn('Invalid amount provided to formatCurrency:', amount);
+                    return '0.00';
+                }
+                return amount.toFixed(2);
+            }
+            
+            addUpdateAnimation() {
+                if (!this.balanceAmountElement) return;
+                
+                this.balanceAmountElement.classList.remove('balance-updated');
+                this.balanceAmountElement.offsetHeight;
+                this.balanceAmountElement.classList.add('balance-updated');
+                
+                setTimeout(() => {
+                    if (this.balanceAmountElement) {
+                        this.balanceAmountElement.classList.remove('balance-updated');
+                    }
+                }, 300);
+            }
+            
+            handleStateChange(eventType, data) {
+                switch (eventType) {
+                    case 'transactionAdded':
+                    case 'transactionDeleted':
+                    case 'dataLoaded':
+                        if (typeof data.totalBalance === 'number') {
+                            this.updateDisplay(data.totalBalance);
+                        }
+                        break;
+                }
+            }
+            
+            getCurrentBalance() {
+                return this.stateManager ? this.stateManager.getTotalBalance() : 0;
+            }
+            
+            resetDisplay() {
+                this.updateDisplay(0);
+            }
+        }
+        
+        // Test functions
+        function runTests() {
+            const results = [];
+            const mockStateManager = new MockStateManager();
+            const balanceComponent = new BalanceDisplayComponent(mockStateManager);
+            
+            // Test 1: Component initialization
+            try {
+                balanceComponent.render(0);
+                const balanceElement = document.querySelector('.balance-amount');
+                if (balanceElement && balanceElement.textContent === '$0.00') {
+                    results.push({ test: 'Component initialization', status: 'PASS' });
+                } else {
+                    results.push({ test: 'Component initialization', status: 'FAIL', error: 'Initial balance not set correctly' });
+                }
+            } catch (error) {
+                results.push({ test: 'Component initialization', status: 'FAIL', error: error.message });
+            }
+            
+            // Test 2: Currency formatting
+            try {
+                const formatted1 = balanceComponent.formatCurrency(123.456);
+                const formatted2 = balanceComponent.formatCurrency(0);
+                const formatted3 = balanceComponent.formatCurrency(1000);
+                
+                if (formatted1 === '123.46' && formatted2 === '0.00' && formatted3 === '1000.00') {
+                    results.push({ test: 'Currency formatting', status: 'PASS' });
+                } else {
+                    results.push({ test: 'Currency formatting', status: 'FAIL', error: `Expected 123.46, 0.00, 1000.00 but got ${formatted1}, ${formatted2}, ${formatted3}` });
+                }
+            } catch (error) {
+                results.push({ test: 'Currency formatting', status: 'FAIL', error: error.message });
+            }
+            
+            // Test 3: Balance update
+            try {
+                balanceComponent.updateDisplay(250.75);
+                const balanceElement = document.querySelector('.balance-amount');
+                if (balanceElement && balanceElement.textContent === '$250.75') {
+                    results.push({ test: 'Balance update', status: 'PASS' });
+                } else {
+                    results.push({ test: 'Balance update', status: 'FAIL', error: 'Balance not updated correctly' });
+                }
+            } catch (error) {
+                results.push({ test: 'Balance update', status: 'FAIL', error: error.message });
+            }
+            
+            // Test 4: State change handling
+            try {
+                mockStateManager.setTotalBalance(500.25);
+                const balanceElement = document.querySelector('.balance-amount');
+                if (balanceElement && balanceElement.textContent === '$500.25') {
+                    results.push({ test: 'State change handling', status: 'PASS' });
+                } else {
+                    results.push({ test: 'State change handling', status: 'FAIL', error: 'State change not handled correctly' });
+                }
+            } catch (error) {
+                results.push({ test: 'State change handling', status: 'FAIL', error: error.message });
+            }
+            
+            // Test 5: Invalid input handling
+            try {
+                const formatted = balanceComponent.formatCurrency('invalid');
+                if (formatted === '0.00') {
+                    results.push({ test: 'Invalid input handling', status: 'PASS' });
+                } else {
+                    results.push({ test: 'Invalid input handling', status: 'FAIL', error: 'Invalid input not handled correctly' });
+                }
+            } catch (error) {
+                results.push({ test: 'Invalid input handling', status: 'FAIL', error: error.message });
+            }
+            
+            // Display results
+            const resultsDiv = document.getElementById('test-results');
+            results.forEach(result => {
+                const div = document.createElement('div');
+                div.className = result.status === 'PASS' ? 'pass' : 'fail';
+                div.innerHTML = `<strong>${result.test}:</strong> ${result.status}${result.error ? ` - ${result.error}` : ''}`;
+                resultsDiv.appendChild(div);
+            });
+            
+            const passCount = results.filter(r => r.status === 'PASS').length;
+            const totalCount = results.length;
+            
+            const summary = document.createElement('div');
+            summary.innerHTML = `<h3>Summary: ${passCount}/${totalCount} tests passed</h3>`;
+            summary.className = passCount === totalCount ? 'pass' : 'fail';
+            resultsDiv.appendChild(summary);
+        }
+        
+        // Run tests when page loads
+        document.addEventListener('DOMContentLoaded', runTests);
+    </script>
+</body>
+</html>
